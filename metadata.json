@@ -1,0 +1,6 @@
+{
+  "name": "Мессенджер",
+  "description": "Мессенджер с автоматическим и ручным изменением статусов присутствия (В сети, Не беспокоить, Отошел, Не в сети).",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
