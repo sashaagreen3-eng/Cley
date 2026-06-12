@@ -54,11 +54,21 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Timer
+import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.PlayCircleOutline
+import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.FileDownload
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Divider
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -195,6 +205,8 @@ fun MessengerApp(
     var mobileScreenState by remember { mutableStateOf<AppScreen>(AppScreen.List) }
     var showStatusDialog by remember { mutableStateOf(false) }
     var showEditNameDialog by remember { mutableStateOf(false) }
+    var showAdminPanel by remember { mutableStateOf(false) }
+    val interUserMessages by viewModel.interUserMessages.collectAsStateWithLifecycle()
 
     // Synchronize selected screen with selection changes
     LaunchedEffect(selectedContactId) {
@@ -226,7 +238,9 @@ fun MessengerApp(
                         settings = userSettings,
                         idleCountdown = idleCountdown,
                         onEditStatusClick = { showStatusDialog = true },
-                        onEditNameClick = { showEditNameDialog = true }
+                        onEditNameClick = { showEditNameDialog = true },
+                        onToggleAdmin = { viewModel.toggleAdminMode(!(userSettings?.isAdmin ?: false)) },
+                        onOpenAdminPanel = { showAdminPanel = true }
                     )
                     
                     Divider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
@@ -277,7 +291,9 @@ fun MessengerApp(
                                 settings = userSettings,
                                 idleCountdown = idleCountdown,
                                 onEditStatusClick = { showStatusDialog = true },
-                                onEditNameClick = { showEditNameDialog = true }
+                                onEditNameClick = { showEditNameDialog = true },
+                                onToggleAdmin = { viewModel.toggleAdminMode(!(userSettings?.isAdmin ?: false)) },
+                                onOpenAdminPanel = { showAdminPanel = true }
                             )
 
                             Divider(color = Color(0x1A000000))
@@ -334,6 +350,19 @@ fun MessengerApp(
                     viewModel.updateUserName(newName)
                     showEditNameDialog = false
                 }
+            )
+        }
+
+        // Popup Dialog for Admin Panel
+        if (showAdminPanel && userSettings != null) {
+            AdminPanelDialog(
+                settings = userSettings!!,
+                interUserMessages = interUserMessages,
+                onDismiss = { showAdminPanel = false },
+                onToggleBlock = { viewModel.updateBlockStatus(it) },
+                onToggleCanWriteFirst = { viewModel.updateCanWriteFirst(it) },
+                onToggleMediaRestricted = { viewModel.updateMediaRestriction(it) },
+                onToggleTextRestricted = { viewModel.updateTextRestriction(it) }
             )
         }
     }
