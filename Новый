@@ -1,0 +1,291 @@
+app/
+├── src/main/java/com/example/messenger/
+│   ├── data/
+│   │   ├── local/          # Room + EncryptedStorage
+│   │   ├── remote/         # Retrofit + WebSocket
+│   │   └── repository/     # Репозитории
+│   ├── domain/
+│   │   ├── model/          # Data classes
+│   │   └── usecase/        # Бизнес-логика
+│   ├── presentation/
+│   │   ├── auth/           # Login/Register
+│   │   ├── chat/           # Список чатов
+│   │   └── message/        # Обмен сообщениями
+│   └── utils/
+│       ├── crypto/         # Шифрование
+│       └── network/        # Network utils
+// CryptoManager.kt
+class CryptoManager(private val context: Context) {
+    private val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+    private val gcm = GCMManager()
+    
+    // Генерация ключевой пары
+    fun generateIdentityKey(): KeyPair {
+        val keyGen = KeyPairGenerator.getInstance("EC", "AndroidKeyStore")
+        keyGen.initialize(
+            KeyGenParameterSpec.Builder("identity_key", KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_AGREE_KEY)
+                .setAlgorithmParameterSpec(ECGenParameterSpec("secp256r1"))
+                .setUserAuthenticationRequired(false)
+                .build()
+        )
+        return keyGen.generateKeyPair()
+    }
+    
+    // E2EE шифрование сообщения
+    fun encryptMessage(
+        plaintext: String,
+        recipientPublicKey: ECPublicKey,
+        sessionId: String
+    ): EncryptedPayload {
+        // 1. Генерируем эфемерный ключ
+        val ephemeralKey = generateEphemeralKey()
+        
+        // 2. Вычисляем общий секрет (ECDH)
+        val sharedSecret = ecdhAgreement(ephemeralKey.private, recipientPublicKey)
+        
+        // 3. Производные ключи (HKDF)
+        val (encKey, macKey) = deriveKeys(sharedSecret, sessionId)
+        
+        // 4. Шифруем сообщение (AES-GCM)
+        val iv = generateIV()
+        val ciphertext = aesGcmEncrypt(plaintext, encKey, iv)
+        
+        // 5. Создаём MAC
+        val mac = hmacSha256(macKey, ciphertext + iv)
+        
+        return EncryptedPayload(
+            ephemeralPublicKey = ephemeralKey.public,
+            iv = iv,
+            ciphertext = ciphertext,
+            mac = mac,
+            sessionId = sessionId
+        )
+    }
+    
+    // Расшифровка
+    fun decryptMessage(payload: EncryptedPayload, myPrivateKey: ECPrivateKey): String {
+        // 1. Восстанавливаем общий секрет
+        val sharedSecret = ecdhAgreement(myPrivateKey, payload.ephemeralPublicKey)
+        
+        // 2. Производные ключи
+        val (encKey, macKey) = deriveKeys(sharedSecret, payload.sessionId)
+        
+        // 3. Проверяем MAC
+        val computedMac = hmacSha256(macKey, payload.ciphertext + payload.iv)
+        if (!MessageDigest.isEqual(computedMac, payload.mac)) {
+            throw SecurityException("MAC mismatch! Message tampered.")
+        }
+        
+        // 4. Расшифровываем
+        return aesGcmDecrypt(payload.ciphertext, encKey, payload.iv)
+    }
+}
+// AuthViewModel.kt
+class AuthViewModel(
+    private val authRepo: AuthRepository,
+    private val bioManager: BiometricManager
+) : ViewModel() {
+    
+    private val _authState = MutableStateFlow<AuthState>(AuthState.Idle)
+    val authState: StateFlow<AuthState> = _authState.asStateFlow()
+    
+    fun loginWithEmail(email: String, password: String) {
+        viewModelScope.launch {
+            _authState.value = AuthState.Loading
+            
+            try {
+                // 1. Аутентификация на сервере
+                val authResult = authRepo.login(email, password)
+                
+                // 2. Получаем ключи пользователя
+                val userKeys = authRepo.getUserKeys(authResult.userId)
+                
+                // 3. Сохраняем в защищённое хранилище
+                saveSecurely(authResult, userKeys)
+                
+                // 4. Запрашиваем биометрию для дополнительной защиты
+                if (bioManager.isBiometricAvailable()) {
+                    val bioResult = bioManager.authenticate()
+                    if (bioResult.success) {
+                        _authState.value = AuthState.Success(authResult)
+                    } else {
+                        _authState.value = AuthState.BiometricFailed
+                    }
+                } else {
+                    _authState.value = AuthState.Success(authResult)
+                }
+            } catch (e: Exception) {
+                _authState.value = AuthState.Error(e.message ?: "Unknown error")
+            }
+        }
+    }
+    
+    private fun saveSecurely(authResult: AuthResult, keys: UserKeys) {
+        // Используем EncryptedSharedPreferences
+        val prefs = EncryptedSharedPreferences.create(
+            context,
+            "auth_prefs",
+            masterKey,
+            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+        )
+        
+        prefs.edit().apply {
+            putString("user_id", authResult.userId)
+            putString("access_token", authResult.accessToken)
+            putString("refresh_token", authResult.refreshToken)
+            putString("public_key", Base64.encodeToString(keys.publicKey))
+            // Приватный ключ храним в KeyStore
+            storePrivateKey(keys.privateKey)
+            apply()
+        }
+    }
+}
+// WebSocketService.kt
+class WebSocketService : Service() {
+    private val client = OkHttpClient.Builder()
+        .pingInterval(30, TimeUnit.SECONDS)
+        .addInterceptor(AuthInterceptor())
+        .build()
+    
+    private var webSocket: WebSocket? = null
+    private val _messages = MutableSharedFlow<ReceivedMessage>()
+    val messages: SharedFlow<ReceivedMessage> = _messages.asSharedFlow()
+    
+    fun connect(userId: String) {
+        val request = Request.Builder()
+            .url("wss://api.messenger.com/ws/$userId")
+            .build()
+        
+        webSocket = client.newWebSocket(request, object : WebSocketListener() {
+            override fun onMessage(webSocket: WebSocket, text: String) {
+                // Расшифровываем входящее сообщение
+                val encrypted = Gson().fromJson(text, EncryptedPayload::class.java)
+                val decrypted = cryptoManager.decryptMessage(encrypted)
+                
+                viewModelScope.launch {
+                    _messages.emit(ReceivedMessage(decrypted))
+                }
+            }
+            
+            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                // Переподключение с экспоненциальной задержкой
+                scheduleReconnect()
+            }
+        })
+    }
+    
+    fun sendMessage(message: String, recipientId: String) {
+        val encrypted = cryptoManager.encryptMessage(
+            plaintext = message,
+            recipientPublicKey = getPublicKey(recipientId),
+            sessionId = generateSessionId()
+        )
+        
+        val json = Gson().toJson(encrypted)
+        webSocket?.send(json)
+    }
+// AppDatabase.kt
+@Database(entities = [MessageEntity::class, ContactEntity::class], version = 1)
+abstract class AppDatabase : RoomDatabase() {
+    abstract fun messageDao(): MessageDao
+    abstract fun contactDao(): ContactDao
+    
+    companion object {
+        private var instance: AppDatabase? = null
+        
+        fun getInstance(context: Context): AppDatabase {
+            return instance ?: synchronized(this) {
+                val passphrase = getDatabasePassphrase()
+                val factory = SupportFactory(passphrase)
+                
+                Room.databaseBuilder(
+                    context,
+                    AppDatabase::class.java,
+                    "encrypted_messenger.db"
+                )
+                .openHelperFactory(factory)
+                .build().also { instance = it }
+            }
+        }
+    }
+}
+
+// MessageDao.kt
+@Dao
+interface MessageDao {
+    @Query("SELECT * FROM messages WHERE chat_id = :chatId ORDER BY timestamp DESC")
+    fun getMessages(chatId: String): Flow<List<MessageEntity>>
+    
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertMessage(message: MessageEntity)
+    
+    @Query("DELETE FROM messages WHERE timestamp < :before AND is_delivered = 1")
+    suspend fun cleanupOldMessages(before: Long)
+}
+}// AnalyticsManager.kt
+class AnalyticsManager {
+    fun trackEvent(event: String, params: Map<String, String>) {
+        // 1. Анонимизируем данные
+        val anonymized = params.mapValues { (key, value) ->
+            when (key) {
+                "user_id" -> hashUserId(value)
+                "device_id" -> hashDeviceId(value)
+                else -> value
+            }
+        }
+        
+        // 2. Отправляем с агрегацией
+        val payload = AnalyticsPayload(
+            event = event,
+            timestamp = System.currentTimeMillis(),
+            params = anonymized,
+            sessionId = getAnonymousSessionId()
+        )
+        
+        // 3. Периодическая отправка батчем
+        batchQueue.add(payload)
+        if (batchQueue.size >= BATCH_SIZE) {
+            flush()
+        }
+    }
+    
+    private fun hashUserId(userId: String): String {
+        val sha256 = MessageDigest.getInstance("SHA-256")
+        val salt = "STATIC_SALT_CHANGE_ME".toByteArray()
+        val hash = sha256.digest((userId + salt).toByteArray())
+        return Base64.encodeToString(hash)
+    }
+}// SyncManager.kt
+class SyncManager(
+    private val localRepo: LocalRepository,
+    private val remoteRepo: RemoteRepository,
+    private val cryptoManager: CryptoManager
+) {
+    fun syncMessages() = runBlocking {
+        // 1. Получаем последний sync-токен
+        val lastSync = getLastSyncToken()
+        
+        // 2. Запрашиваем изменения с сервера
+        val updates = remoteRepo.getUpdates(lastSync)
+        
+        // 3. Расшифровываем и сохраняем
+        updates.forEach { update ->
+            when (update.type) {
+                UpdateType.NEW_MESSAGE -> {
+                    val decrypted = cryptoManager.decryptMessage(update.payload)
+                    localRepo.saveMessage(decrypted)
+                }
+                UpdateType.DELIVERY_STATUS -> {
+                    localRepo.updateDeliveryStatus(update.messageId, update.status)
+                }
+                UpdateType.READ_RECEIPT -> {
+                    localRepo.markAsRead(update.messageId)
+                }
+            }
+        }
+        
+        // 4. Обновляем sync-токен
+        saveSyncToken(updates.last().timestamp)
+    }
+}
