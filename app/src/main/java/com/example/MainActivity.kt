@@ -114,6 +114,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.data.ContactEntity
 import com.example.data.MessageEntity
 import com.example.data.UserSettingsEntity
+import com.example.data.InterUserMessageEntity
 import com.example.ui.ChatViewModel
 import com.example.ui.theme.MyApplicationTheme
 import java.text.SimpleDateFormat
@@ -375,7 +376,9 @@ fun ChatListHeader(
     settings: UserSettingsEntity?,
     idleCountdown: Int,
     onEditStatusClick: () -> Unit,
-    onEditNameClick: () -> Unit
+    onEditNameClick: () -> Unit,
+    onToggleAdmin: () -> Unit,
+    onOpenAdminPanel: () -> Unit
 ) {
     Surface(
         color = Color.Transparent,
@@ -575,6 +578,63 @@ fun ChatListHeader(
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
+                    }
+                }
+                
+                Spacer(modifier = Modifier.height(12.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.Security,
+                            contentDescription = "Режим администратора",
+                            tint = if (settings.isAdmin) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Режим администратора",
+                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                    Switch(
+                        checked = settings.isAdmin,
+                        onCheckedChange = { onToggleAdmin() },
+                        modifier = Modifier
+                            .scale(0.85f)
+                            .testTag("admin_mode_toggle")
+                    )
+                }
+
+                if (settings.isAdmin) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Button(
+                        onClick = onOpenAdminPanel,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("open_admin_panel_button"),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.primaryContainer,
+                            contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                        ),
+                        shape = RoundedCornerShape(16.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Security,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Открыть админ-панель",
+                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
+                        )
                     }
                 }
             }
@@ -1473,5 +1533,248 @@ private fun getStatusTextRu(status: String): String {
 private fun formatTime(timestamp: Long): String {
     val sdf = SimpleDateFormat("HH:mm", Locale.getDefault())
     return sdf.format(Date(timestamp))
+}
+
+@Composable
+fun AdminPanelDialog(
+    settings: UserSettingsEntity,
+    interUserMessages: List<InterUserMessageEntity>,
+    onDismiss: () -> Unit,
+    onToggleBlock: (Boolean) -> Unit,
+    onToggleCanWriteFirst: (Boolean) -> Unit,
+    onToggleMediaRestricted: (Boolean) -> Unit,
+    onToggleTextRestricted: (Boolean) -> Unit
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxHeight(0.85f)
+                .glassPanel(RoundedCornerShape(24.dp))
+                .testTag("admin_panel_dialog_surface"),
+            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f),
+            shape = RoundedCornerShape(24.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(20.dp)
+            ) {
+                // Header
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.Security,
+                            contentDescription = "Админ-панель",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Text(
+                            text = "Панель Администратора",
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Policy Controls Group
+                Text(
+                    text = "Политики безопасности",
+                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+                    ),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp)
+                    ) {
+                        // Policy 1: Block User
+                        PolicyRow(
+                            title = "Заблокировать чаты",
+                            desc = "Полная блокировка отправки и приема",
+                            checked = settings.isBlocked,
+                            onCheckedChange = onToggleBlock
+                        )
+                        Divider(modifier = Modifier.padding(vertical = 8.dp), color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
+                        
+                        // Policy 2: Can write first
+                        PolicyRow(
+                            title = "Разрешить писать первым",
+                            desc = "Позволяет инициировать новые диалоги",
+                            checked = settings.canWriteFirst,
+                            onCheckedChange = onToggleCanWriteFirst
+                        )
+                        Divider(modifier = Modifier.padding(vertical = 8.dp), color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
+
+                        // Policy 3: Media sending restricted
+                        PolicyRow(
+                            title = "Ограничить отправку медиа",
+                            desc = "Запрещает отправку фото, видео и документов",
+                            checked = settings.mediaSendingRestricted,
+                            onCheckedChange = onToggleMediaRestricted
+                        )
+                        Divider(modifier = Modifier.padding(vertical = 8.dp), color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
+
+                        // Policy 4: Text sending restricted
+                        PolicyRow(
+                            title = "Ограничить отправку текста",
+                            desc = "Запрещает отправку обычных текстовых сообщений",
+                            checked = settings.textSendingRestricted,
+                            onCheckedChange = onToggleTextRestricted
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Messages Auditing Section
+                Text(
+                    text = "Журнал аудита сообщений (${interUserMessages.size})",
+                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.15f))
+                        .padding(8.dp)
+                ) {
+                    if (interUserMessages.isEmpty()) {
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "Журнал сообщений пуст",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    } else {
+                        androidx.compose.foundation.lazy.LazyColumn(
+                            modifier = Modifier.fillMaxSize()
+                        ) {
+                            items(interUserMessages.size) { index ->
+                                val msg = interUserMessages[index]
+                                InterUserMessageRow(msg)
+                                if (index < interUserMessages.size - 1) {
+                                    Divider(
+                                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f),
+                                        modifier = Modifier.padding(vertical = 4.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Button(
+                    onClick = onDismiss,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("admin_panel_close_button")
+                ) {
+                    Text("Закрыть")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun PolicyRow(
+    title: String,
+    desc: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+                text = desc,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            modifier = Modifier.scale(0.8f)
+        )
+    }
+}
+
+@Composable
+fun InterUserMessageRow(msg: InterUserMessageEntity) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = msg.senderName,
+                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Text(
+                    text = " ➔ ",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = msg.receiverName,
+                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.secondary
+                )
+            }
+            Text(
+                text = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(msg.timestamp)),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+            )
+        }
+        Spacer(modifier = Modifier.height(2.dp))
+        Text(
+            text = msg.text,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+    }
 }
 
